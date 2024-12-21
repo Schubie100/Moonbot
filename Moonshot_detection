@@ -1,0 +1,103 @@
+import requests
+import pandas as pd
+import time
+
+# Base URL for Binance API
+BASE_URL = "https://api.binance.com/api/v3"
+
+# Define the coins and their trading pairs on Binance
+coins = {
+    "bitcoin": "BTCUSDT",
+    "ethereum": "ETHUSDT",
+    "cardano": "ADAUSDT",
+    "dogecoin": "DOGEUSDT"
+}
+
+# Fetch historical price data for a coin
+def fetch_binance_historical_data(symbol, interval="1d", limit=1000):
+    url = f"{BASE_URL}/klines"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
+    }
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        df = pd.DataFrame(data, columns=[
+            'open_time', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_asset_volume', 'number_of_trades',
+            'taker_buy_base', 'taker_buy_quote', 'ignore'
+        ])
+        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
+        df['close_time'] = pd.to_datetime(df['close_time'], unit='ms')
+        df['open'] = df['open'].astype(float)
+        df['high'] = df['high'].astype(float)
+        df['low'] = df['low'].astype(float)
+        df['close'] = df['close'].astype(float)
+        df['volume'] = df['volume'].astype(float)
+        return df[['open_time', 'open', 'high', 'low', 'close', 'volume']]
+    else:
+        print(f"Failed to fetch data for {symbol}: {response.status_code}")
+        return None
+
+# Identify moonshots
+def detect_moonshots(df, multiple=100, max_days=180):
+    moonshots = []
+    for i in range(len(df)):
+        start_price = df.loc[i, 'close']
+        start_date = df.loc[i, 'open_time']
+        # Look ahead for the next max_days
+        for j in range(i + 1, len(df)):
+            days_diff = (df.loc[j, 'open_time'] - start_date).days
+            if days_diff > max_days:
+                break
+            if df.loc[j, 'high'] >= start_price * multiple:
+                moonshots.append({
+                    'start_date': start_date,
+                    'start_price': start_price,
+                    'peak_date': df.loc[j, 'open_time'],
+                    'peak_price': df.loc[j, 'high'],
+                    'duration_days': days_diff
+                })
+                break
+    return moonshots
+
+# Main script
+def main():
+    results = []
+
+    for coin_name, trading_pair in coins.items():
+        print(f"Processing {coin_name} ({trading_pair})...")
+        try:
+            # Fetch historical data (1000 days of daily data)
+            historical_data = fetch_binance_historical_data(trading_pair, interval="1d", limit=1000)
+            if historical_data is not None:
+                # Detect moonshots
+                moonshots = detect_moonshots(historical_data, multiple=100, max_days=180)
+                for moonshot in moonshots:
+                    results.append({
+                        'coin_name': coin_name,
+                        'trading_pair': trading_pair,
+                        'start_date': moonshot['start_date'],
+                        'start_price': moonshot['start_price'],
+                        'peak_date': moonshot['peak_date'],
+                        'peak_price': moonshot['peak_price'],
+                        'duration_days': moonshot['duration_days']
+                    })
+        except Exception as e:
+            print(f"Error processing {coin_name}: {e}")
+        time.sleep(1)  # Pause to avoid hitting rate limits
+
+    # Save results to CSV
+    if results:
+        df_results = pd.DataFrame(results)
+        filename = "binance_moonshots.csv"
+        df_results.to_csv(filename, index=False)
+        print(f"Moonshots saved to {filename}")
+    else:
+        print("No moonshots found.")
+
+# Run the script
+if __name__ == "__main__":
+    main()
